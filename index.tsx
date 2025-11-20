@@ -266,6 +266,25 @@ interface DifficultySelectorProps {
 }
 
 const DifficultySelector: React.FC<DifficultySelectorProps> = ({ onSelectDifficulty, selectedLanguage, onSelectLanguage }) => {
+  
+  const difficultyLabels: Record<Language, Record<Difficulty, string>> = {
+    [Language.English]: {
+      [Difficulty.Easy]: 'Super Easy',
+      [Difficulty.Moderate]: 'Easy',
+      [Difficulty.Hard]: 'Normal',
+    },
+    [Language.Hebrew]: {
+      [Difficulty.Easy]: 'קל מאוד',
+      [Difficulty.Moderate]: 'קל',
+      [Difficulty.Hard]: 'רגיל',
+    },
+    [Language.Russian]: {
+      [Difficulty.Easy]: 'Супер легко',
+      [Difficulty.Moderate]: 'Легко',
+      [Difficulty.Hard]: 'Нормально',
+    },
+  };
+
   return (
     <div className="flex flex-col items-center justify-center h-full bg-black bg-opacity-50 p-8 rounded-2xl shadow-lg backdrop-blur-sm">
       <h1 className="text-3xl md:text-5xl text-white font-bold mb-6 text-center" style={{ textShadow: '4px 4px #000000' }}>
@@ -307,7 +326,7 @@ const DifficultySelector: React.FC<DifficultySelectorProps> = ({ onSelectDifficu
               boxShadow: '8px 8px 0px #000000'
             }}
           >
-            {Difficulty[key]}
+            {difficultyLabels[selectedLanguage][Difficulty[key]]}
           </button>
         ))}
       </div>
