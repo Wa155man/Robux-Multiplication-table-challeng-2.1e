@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Modality } from "@google/genai";
 
 // ============================================================================
-// TYPES (from types.ts)
+// TYPES
 // ============================================================================
 type GameState = 'selecting_difficulty' | 'playing' | 'won';
 
@@ -27,10 +27,107 @@ interface Question {
 }
 
 // ============================================================================
-// SERVICES (from services/geminiService.ts)
+// AUDIO SYSTEM (Singleton Pattern with State Management)
+// ============================================================================
+let globalAudioContext: AudioContext | null = null;
+let currentAudioSource: AudioBufferSourceNode | null = null;
+
+function getAudioContext(): AudioContext {
+  if (!globalAudioContext) {
+    // Use window.AudioContext or webkit prefix for older Safari/Mobile
+    globalAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+      sampleRate: 24000, // Gemini output is 24kHz
+    });
+  }
+  return globalAudioContext;
+}
+
+function wakeUpAudioContext() {
+  const ctx = getAudioContext();
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(err => console.warn("Audio resume failed:", err));
+  }
+}
+
+function stopAudio() {
+    if (currentAudioSource) {
+        try {
+            currentAudioSource.stop();
+            currentAudioSource.disconnect();
+        } catch (e) {
+            // Ignore errors if source already stopped
+        }
+        currentAudioSource = null;
+    }
+}
+
+function decode(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decodeAudioData(data: Uint8Array, ctx: AudioContext): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length;
+  const buffer = ctx.createBuffer(1, frameCount, 24000);
+  const channelData = buffer.getChannelData(0);
+  for (let i = 0; i < frameCount; i++) {
+    channelData[i] = dataInt16[i] / 32768.0;
+  }
+  return buffer;
+}
+
+const playAudio = async (audioData: string | null) => {
+    if (!audioData) return;
+    
+    // Stop any currently playing audio to prevent overlap
+    stopAudio();
+
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === 'suspended') {
+         await ctx.resume(); 
+      }
+      
+      const audioBuffer = await decodeAudioData(decode(audioData), ctx);
+      
+      // Double check to stop anything that might have started during the async decode
+      stopAudio();
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      
+      currentAudioSource = source;
+      
+      source.onended = () => {
+          if (currentAudioSource === source) {
+              currentAudioSource = null;
+          }
+      };
+
+      source.start(0);
+    } catch (error) {
+      console.error("Audio playback error:", error);
+    }
+};
+
+// ============================================================================
+// SERVICES
 // ============================================================================
 async function generateSpeech(text: string): Promise<string | null> {
     try {
+        // Safety check: prevent crash if process or API_KEY is missing (e.g. GitHub Pages)
+        if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
+          console.warn("API Key is missing. Speech generation skipped.");
+          return null;
+        }
+
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
@@ -61,7 +158,7 @@ async function getComplimentSpeech(compliment: string): Promise<string | null> {
 }
 
 // ============================================================================
-// ICONS (from components/icons.tsx)
+// ICONS
 // ============================================================================
 const RobuxIcon: React.FC<{ className?: string }> = ({ className }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -79,6 +176,13 @@ const RobuxIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
+const FireIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M13.5 3.14001C13.5 3.14001 16.64 5.59001 15.63 9.30001C17.95 10.24 19.05 12.99 18.22 15.36C17.26 18.13 14.26 19.61 11.49 18.65C10.74 18.39 10.09 17.96 9.56001 17.42C9.03001 17.98 8.30001 18.34 7.49001 18.34C5.83001 18.34 4.49001 17 4.49001 15.34C4.49001 14.23 5.09001 13.24 6.00001 12.71C5.85001 12.03 5.98001 11.29 6.46001 10.73C7.76001 9.21001 10.05 9.03001 11.57 10.33C11.81 10.54 12.01 10.78 12.17 11.04C11.65 7.17001 13.5 3.14001 13.5 3.14001Z" fill="#F97316"/>
+        <path d="M12.5 6C12.5 6 13.5 8 12.5 10C14 11 15 13 14 15C13.5 16 12 16.5 11 16C11.5 14.5 10.5 13.5 10 13.5C10.5 11.5 12.5 6 12.5 6Z" fill="#FDBA74"/>
+    </svg>
+);
+
 const ResetIcon: React.FC<{ className?: string }> = ({ className }) => (
     <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4C7.58 4 4.01 7.58 4.01 12C4.01 16.42 7.58 20 12 20C15.73 20 18.84 17.45 19.73 14H17.65C16.83 16.33 14.61 18 12 18C8.69 18 6 15.31 6 12C6 8.69 8.69 6 12 6C13.66 6 15.14 6.69 16.22 7.78L13 11H20V4L17.65 6.35Z" fill="currentColor"/>
@@ -86,7 +190,7 @@ const ResetIcon: React.FC<{ className?: string }> = ({ className }) => (
 );
 
 // ============================================================================
-// VICTORY SCREEN (from components/VictoryScreen.tsx)
+// VICTORY SCREEN
 // ============================================================================
 interface VictoryScreenProps {
   onPlayAgain: () => void;
@@ -135,7 +239,10 @@ const VictoryScreen: React.FC<VictoryScreenProps> = ({ onPlayAgain }) => {
           You won 1000 Robux! Go to your parents to collect the gift!
         </p>
         <button
-          onClick={onPlayAgain}
+          onClick={() => {
+              wakeUpAudioContext();
+              onPlayAgain();
+          }}
           className="bg-green-500 text-white text-2xl font-bold py-4 px-10 rounded-lg shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-green-300"
           style={{ 
             border: '4px solid black',
@@ -150,7 +257,7 @@ const VictoryScreen: React.FC<VictoryScreenProps> = ({ onPlayAgain }) => {
 };
 
 // ============================================================================
-// DIFFICULTY SELECTOR (from components/DifficultySelector.tsx)
+// DIFFICULTY SELECTOR
 // ============================================================================
 interface DifficultySelectorProps {
   onSelectDifficulty: (difficulty: Difficulty) => void;
@@ -189,7 +296,10 @@ const DifficultySelector: React.FC<DifficultySelectorProps> = ({ onSelectDifficu
         {(Object.keys(Difficulty) as Array<keyof typeof Difficulty>).map((key) => (
           <button
             key={key}
-            onClick={() => onSelectDifficulty(Difficulty[key])}
+            onClick={() => {
+                wakeUpAudioContext();
+                onSelectDifficulty(Difficulty[key]);
+            }}
             className="text-white text-2xl font-bold py-8 px-6 rounded-lg shadow-xl transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-yellow-300"
             style={{
               backgroundColor: key === 'Easy' ? '#22c55e' : key === 'Moderate' ? '#f59e0b' : '#ef4444',
@@ -206,7 +316,7 @@ const DifficultySelector: React.FC<DifficultySelectorProps> = ({ onSelectDifficu
 };
 
 // ============================================================================
-// GAME SCREEN (from components/GameScreen.tsx)
+// GAME SCREEN
 // ============================================================================
 interface GameScreenProps {
   difficulty: Difficulty;
@@ -218,43 +328,6 @@ interface GameScreenProps {
 
 const COMPLIMENTS = ['Good!', 'Excellent!', 'Great job!', 'You are doing well!', 'You are amazing!'];
 const HIGH_SCORE_COMPLIMENTS = ["You are almost there!", "Keep up the good work!", "You are going to win soon!", "You are so smart!"];
-
-// Audio Decoding Helpers
-function decode(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function decodeAudioData(
-  data: Uint8Array,
-  ctx: AudioContext,
-): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length;
-  const buffer = ctx.createBuffer(1, frameCount, 24000);
-  const channelData = buffer.getChannelData(0);
-  for (let i = 0; i < frameCount; i++) {
-    channelData[i] = dataInt16[i] / 32768.0;
-  }
-  return buffer;
-}
-
-const playAudio = (audioData: string) => {
-    if (audioData) {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      decodeAudioData(decode(audioData), audioContext).then(audioBuffer => {
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.start(0);
-      });
-    }
-};
 
 const getPenalty = (score: number): number => {
     if (score >= 930) {
@@ -280,6 +353,10 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
   const [showIntroMessage, setShowIntroMessage] = useState(true);
   const [typedAnswer, setTypedAnswer] = useState('');
   const [lastQuestion, setLastQuestion] = useState<{ num1: number, num2: number } | null>(null);
+  
+  // Ref to track the latest audio request ID.
+  // If the ID changes (new question/new answer), stale audio requests are ignored.
+  const audioRequestRef = useRef(0);
 
   const isInitialLoad = useRef(true);
 
@@ -412,10 +489,14 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
     setCurrentQuestion({ num1, num2, answer, options: shuffledOptions });
     setIsAnswered(false);
     setFeedback({});
+    
+    // Increment request ID: Any pending audio from previous questions is now invalid
+    const requestId = ++audioRequestRef.current;
 
     // Fetch and play audio in the background
     getQuestionSpeech(questionText).then(audioData => {
-        if (audioData) {
+        // Strict check: Only play if this specific question is still the active one
+        if (audioRequestRef.current === requestId && audioData) {
             playAudio(audioData);
         }
     });
@@ -433,6 +514,11 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
     if (isAnswered) return;
 
     setIsAnswered(true);
+    
+    // Immediately stop reading the question if user answers
+    stopAudio();
+    // Increment request ID to invalidate any pending question audio fetch
+    const requestId = ++audioRequestRef.current;
 
     if (selectedOption === currentQuestion?.answer) {
       setRobuxScore(score => score + 5);
@@ -442,7 +528,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
       setFeedback({});
       const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
       const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
-      getComplimentSpeech(randomCompliment).then(playAudio);
+      getComplimentSpeech(randomCompliment).then(audioData => {
+         // Relaxed check: Play compliment even if we've advanced to the next question generation (requestId + 1)
+         // This prevents the compliment from being dropped if the network is slightly slow or the timeout fires first.
+         if (audioRequestRef.current <= requestId + 1 && audioData) {
+             playAudio(audioData);
+         }
+      });
     } else {
       const penalty = getPenalty(robuxScore);
       setRobuxScore(score => Math.max(0, score - penalty));
@@ -461,6 +553,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
     if (isAnswered || !typedAnswer.trim()) return;
     
     setIsAnswered(true);
+    stopAudio(); // Stop question audio
+    const requestId = ++audioRequestRef.current; // New audio context
+
     const userAnswer = parseInt(typedAnswer, 10);
 
     if (userAnswer === currentQuestion?.answer) {
@@ -471,7 +566,12 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
         setFeedback({});
         const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
         const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
-        getComplimentSpeech(randomCompliment).then(playAudio);
+        getComplimentSpeech(randomCompliment).then(audioData => {
+            // Relaxed check: Play compliment even if next question generated
+            if (audioRequestRef.current <= requestId + 1 && audioData) {
+                playAudio(audioData);
+            }
+        });
     } else {
         const penalty = getPenalty(robuxScore);
         setRobuxScore(score => Math.max(0, score - penalty));
@@ -572,8 +672,18 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
   const isTypedAnswerCorrect = isAnswered && parseInt(typedAnswer, 10) === currentQuestion?.answer;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto p-4">
-      <div className="text-black text-6xl md:text-8xl font-bold mb-12 md:mb-20" style={{ textShadow: '3px 3px 4px rgba(255,255,255,0.7)' }}>
+    <div className="flex flex-col items-center justify-center h-full w-full max-w-4xl mx-auto p-4 relative">
+      
+      {/* STREAK COUNTER - INLINE POSITION */}
+      {/* Using a set height container prevents jumping when streak appears/disappears */}
+      <div className={`h-16 flex items-center justify-center transition-all duration-500 ${correctStreak > 1 ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}>
+          <div className="flex items-center space-x-2 bg-black bg-opacity-60 p-2 px-4 rounded-full border-2 border-orange-500 shadow-lg">
+            <FireIcon className="w-6 h-6 md:w-8 md:h-8 animate-pulse text-orange-500" />
+            <span className="text-orange-400 font-bold text-lg md:text-2xl" style={{ textShadow: '1px 1px 0 #000' }}>Streak: {correctStreak}</span>
+          </div>
+      </div>
+
+      <div className="text-black text-6xl md:text-8xl font-bold mb-8 md:mb-12 mt-2" style={{ textShadow: '3px 3px 4px rgba(255,255,255,0.7)' }}>
         {currentQuestion.num1} x {currentQuestion.num2}
       </div>
 
@@ -635,7 +745,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
 
 
 // ============================================================================
-// APP COMPONENT (from App.tsx)
+// APP COMPONENT
 // ============================================================================
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>('selecting_difficulty');
@@ -682,7 +792,7 @@ const App: React.FC = () => {
       style={{ backgroundImage: "url('https://images.unsplash.com/photo-1614728263952-84ea256ec346?q=80&w=1920&h=1080&auto=format&fit=crop')" }}
     >
       {gameState !== 'won' && (
-        <div className="absolute top-4 right-4 flex items-center space-x-4">
+        <div className="absolute top-4 right-4 flex items-center space-x-4 z-50">
           <div className="flex items-center space-x-2 bg-black bg-opacity-60 p-2 px-4 rounded-full text-xl md:text-2xl" style={{ border: '2px solid white' }}>
             <RobuxIcon className="w-8 h-8"/>
             <span>{robuxScore}</span>
@@ -703,7 +813,7 @@ const App: React.FC = () => {
 
 
 // ============================================================================
-// RENDER (original index.tsx)
+// RENDER
 // ============================================================================
 const rootElement = document.getElementById('root');
 if (!rootElement) {
