@@ -489,10 +489,65 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
 
   if (showIntroMessage) {
     return (
-        <div className="flex flex-col items-center justify-center h-full text-center p-4">
-            <h2 className="text-4xl md:text-5xl text-white font-bold p-8 rounded-lg bg-black bg-opacity-60" style={{ textShadow: '4px 4px #000' }}>
-                You can collect and win 1000 Robux in this game - Good luck!
-            </h2>
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black bg-opacity-80 backdrop-blur-sm p-4">
+            
+            {/* Floating Robux Background Effect */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                {[...Array(8)].map((_, i) => (
+                    <div key={i} className="absolute opacity-30 animate-pulse" 
+                         style={{
+                             top: `${Math.random() * 100}%`,
+                             left: `${Math.random() * 100}%`,
+                             animationDuration: `${2 + Math.random() * 3}s`
+                         }}>
+                         <RobuxIcon className="w-12 h-12 md:w-24 md:h-24" />
+                    </div>
+                ))}
+            </div>
+
+            <div className="relative z-10 flex flex-col items-center max-w-4xl w-full">
+                
+                {/* Characters and Coins Row */}
+                <div className="flex items-end justify-center space-x-4 md:space-x-12 mb-8">
+                    {/* Character 1 */}
+                    <img 
+                        src="https://robohash.org/roblox-warrior?set=set1&size=200x200" 
+                        alt="Character 1" 
+                        className="w-24 h-24 md:w-40 md:h-40 drop-shadow-2xl transform -rotate-6 animate-bounce"
+                        style={{ animationDuration: '2s' }}
+                    />
+                    
+                    {/* Big Pile of Robux */}
+                    <div className="flex flex-col items-center mb-4">
+                         <div className="flex -space-x-4">
+                            <RobuxIcon className="w-16 h-16 md:w-24 md:h-24 text-yellow-400 drop-shadow-lg animate-pulse" />
+                            <RobuxIcon className="w-20 h-20 md:w-32 md:h-32 text-yellow-400 drop-shadow-xl z-10" />
+                            <RobuxIcon className="w-16 h-16 md:w-24 md:h-24 text-yellow-400 drop-shadow-lg animate-pulse" />
+                         </div>
+                    </div>
+
+                    {/* Character 2 */}
+                    <img 
+                        src="https://robohash.org/roblox-builder?set=set1&size=200x200" 
+                        alt="Character 2" 
+                        className="w-24 h-24 md:w-40 md:h-40 drop-shadow-2xl transform rotate-6 animate-bounce"
+                        style={{ animationDuration: '2.2s' }}
+                    />
+                </div>
+
+                {/* Message Box */}
+                <div className="bg-gradient-to-r from-slate-800 to-slate-900 border-4 border-yellow-500 p-8 rounded-3xl shadow-2xl text-center transform scale-100">
+                    <h2 className="text-3xl md:text-5xl text-white font-bold leading-tight mb-4" style={{ textShadow: '2px 2px 0 #000' }}>
+                        Win <span className="text-yellow-400">1000 Robux</span>!
+                    </h2>
+                    <p className="text-xl md:text-2xl text-gray-300 font-bold">
+                        Answer correctly to collect them all.
+                    </p>
+                    <div className="mt-6 text-2xl md:text-4xl font-black text-green-400 animate-pulse">
+                        GOOD LUCK!
+                    </div>
+                </div>
+            </div>
         </div>
     );
   }
