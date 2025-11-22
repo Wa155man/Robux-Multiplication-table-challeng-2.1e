@@ -1,23 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
-import { GoogleGenAI, Modality } from "@google/genai";
-
-// ============================================================================
-// ENVIRONMENT POLYFILL (Fixes ReferenceError in Browser)
-// ============================================================================
-// This ensures process.env.API_KEY exists even in static browser environments.
-if (typeof window !== 'undefined' && typeof process === 'undefined') {
-    const storedKey = localStorage.getItem('GEMINI_API_KEY') || '';
-    (window as any).process = { 
-        env: { 
-            API_KEY: storedKey 
-        } 
-    };
-    
-    if (!storedKey) {
-        console.log("%c To enable speech on GitHub/Browser: Open Console -> Run: localStorage.setItem('GEMINI_API_KEY', 'your_key_here') -> Reload", "background: #222; color: #bada55; padding: 4px; border-radius: 4px;");
-    }
-}
 
 // ============================================================================
 // TYPES
@@ -44,137 +26,47 @@ interface Question {
 }
 
 // ============================================================================
-// AUDIO SYSTEM (Singleton Pattern with State Management)
+// NATIVE BROWSER AUDIO SYSTEM (Web Speech API)
 // ============================================================================
-let globalAudioContext: AudioContext | null = null;
-let currentAudioSource: AudioBufferSourceNode | null = null;
+// No API Key required. Uses the browser's built-in TTS engine.
 
-function getAudioContext(): AudioContext {
-  if (!globalAudioContext) {
-    // Use window.AudioContext or webkit prefix for older Safari/Mobile
-    globalAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-      sampleRate: 24000, // Gemini output is 24kHz
-    });
+const speakText = (text: string, language: Language) => {
+  if (!('speechSynthesis' in window)) {
+    console.warn('Web Speech API not supported in this browser.');
+    return;
   }
-  return globalAudioContext;
-}
 
-function wakeUpAudioContext() {
-  const ctx = getAudioContext();
-  if (ctx.state === 'suspended') {
-    ctx.resume().catch(err => console.warn("Audio resume failed:", err));
+  // Stop any currently speaking text to prevent overlap
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  
+  // Map internal Language enum to BCP 47 language tags
+  switch (language) {
+    case Language.Hebrew:
+      utterance.lang = 'he-IL';
+      break;
+    case Language.Russian:
+      utterance.lang = 'ru-RU';
+      break;
+    case Language.English:
+    default:
+      utterance.lang = 'en-US';
+      break;
   }
-}
 
-function stopAudio() {
-    if (currentAudioSource) {
-        try {
-            currentAudioSource.stop();
-            currentAudioSource.disconnect();
-        } catch (e) {
-            // Ignore errors if source already stopped
-        }
-        currentAudioSource = null;
-    }
-}
+  utterance.rate = 1.0; // Normal speed
+  utterance.pitch = 1.0; // Normal pitch
 
-function decode(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  // Ensure voices are loaded (Chrome quirk)
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length > 0) {
+      // Optional: Select a specific preferred voice if needed, 
+      // but allowing the browser default for the requested lang is usually safest.
   }
-  return bytes;
-}
 
-async function decodeAudioData(data: Uint8Array, ctx: AudioContext): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length;
-  const buffer = ctx.createBuffer(1, frameCount, 24000);
-  const channelData = buffer.getChannelData(0);
-  for (let i = 0; i < frameCount; i++) {
-    channelData[i] = dataInt16[i] / 32768.0;
-  }
-  return buffer;
-}
-
-const playAudio = async (audioData: string | null) => {
-    if (!audioData) return;
-    
-    // Stop any currently playing audio to prevent overlap
-    stopAudio();
-
-    try {
-      const ctx = getAudioContext();
-      if (ctx.state === 'suspended') {
-         await ctx.resume(); 
-      }
-      
-      const audioBuffer = await decodeAudioData(decode(audioData), ctx);
-      
-      // Double check to stop anything that might have started during the async decode
-      stopAudio();
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      
-      currentAudioSource = source;
-      
-      source.onended = () => {
-          if (currentAudioSource === source) {
-              currentAudioSource = null;
-          }
-      };
-
-      source.start(0);
-    } catch (error) {
-      console.error("Audio playback error:", error);
-    }
+  window.speechSynthesis.speak(utterance);
 };
-
-// ============================================================================
-// SERVICES
-// ============================================================================
-async function generateSpeech(text: string): Promise<string | null> {
-    // Access is safe due to polyfill above
-    const apiKey = process.env.API_KEY;
-
-    if (!apiKey) {
-        // Fail silently if no key is present (avoids spamming console on GitHub demo)
-        return null;
-    }
-
-    try {
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text }] }],
-            config: {
-                responseModalities: [Modality.AUDIO],
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: { voiceName: 'Kore' },
-                    },
-                },
-            },
-        });
-        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        return base64Audio || null;
-    } catch (error) {
-        console.error("Error generating speech:", error);
-        return null;
-    }
-}
-
-async function getQuestionSpeech(questionText: string): Promise<string | null> {
-  return generateSpeech(`Say: ${questionText}`);
-}
-
-async function getComplimentSpeech(compliment: string): Promise<string | null> {
-    return generateSpeech(compliment);
-}
 
 // ============================================================================
 // ICONS
@@ -259,7 +151,6 @@ const VictoryScreen: React.FC<VictoryScreenProps> = ({ onPlayAgain }) => {
         </p>
         <button
           onClick={() => {
-              wakeUpAudioContext();
               onPlayAgain();
           }}
           className="bg-green-500 text-white text-2xl font-bold py-4 px-10 rounded-lg shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-green-300"
@@ -335,7 +226,6 @@ const DifficultySelector: React.FC<DifficultySelectorProps> = ({ onSelectDifficu
           <button
             key={key}
             onClick={() => {
-                wakeUpAudioContext();
                 onSelectDifficulty(Difficulty[key]);
             }}
             className="text-white text-2xl font-bold py-8 px-6 rounded-lg shadow-xl transition-transform transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-yellow-300"
@@ -392,10 +282,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
   const [typedAnswer, setTypedAnswer] = useState('');
   const [lastQuestion, setLastQuestion] = useState<{ num1: number, num2: number } | null>(null);
   
-  // Ref to track the latest audio request ID.
-  // If the ID changes (new question/new answer), stale audio requests are ignored.
-  const audioRequestRef = useRef(0);
-
   const isInitialLoad = useRef(true);
 
   useEffect(() => {
@@ -528,16 +414,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
     setIsAnswered(false);
     setFeedback({});
     
-    // Increment request ID: Any pending audio from previous questions is now invalid
-    const requestId = ++audioRequestRef.current;
-
-    // Fetch and play audio in the background
-    getQuestionSpeech(questionText).then(audioData => {
-        // Strict check: Only play if this specific question is still the active one
-        if (audioRequestRef.current === requestId && audioData) {
-            playAudio(audioData);
-        }
-    });
+    // Speak question using browser native API
+    speakText(questionText, language);
 
   }, [difficulty, language, correctAnswersCount, correctStreak, robuxScore, difficultyLevel, lastQuestion]);
   
@@ -553,10 +431,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
 
     setIsAnswered(true);
     
-    // Immediately stop reading the question if user answers
-    stopAudio();
-    // Increment request ID to invalidate any pending question audio fetch
-    const requestId = ++audioRequestRef.current;
+    // Stop reading question
+    window.speechSynthesis.cancel();
 
     if (selectedOption === currentQuestion?.answer) {
       setRobuxScore(score => score + 5);
@@ -566,13 +442,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
       setFeedback({});
       const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
       const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
-      getComplimentSpeech(randomCompliment).then(audioData => {
-         // Relaxed check: Play compliment even if we've advanced to the next question generation (requestId + 1)
-         // This prevents the compliment from being dropped if the network is slightly slow or the timeout fires first.
-         if (audioRequestRef.current <= requestId + 1 && audioData) {
-             playAudio(audioData);
-         }
-      });
+      
+      speakText(randomCompliment, language);
+
     } else {
       const penalty = getPenalty(robuxScore);
       setRobuxScore(score => Math.max(0, score - penalty));
@@ -584,15 +456,14 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
     setTimeout(() => {
       generateQuestion();
     }, 1250);
-  }, [isAnswered, currentQuestion, setRobuxScore, generateQuestion, robuxScore]);
+  }, [isAnswered, currentQuestion, setRobuxScore, generateQuestion, robuxScore, language]);
 
   const handleTypedAnswerSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     if (isAnswered || !typedAnswer.trim()) return;
     
     setIsAnswered(true);
-    stopAudio(); // Stop question audio
-    const requestId = ++audioRequestRef.current; // New audio context
+    window.speechSynthesis.cancel(); // Stop question
 
     const userAnswer = parseInt(typedAnswer, 10);
 
@@ -604,12 +475,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
         setFeedback({});
         const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
         const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
-        getComplimentSpeech(randomCompliment).then(audioData => {
-            // Relaxed check: Play compliment even if next question generated
-            if (audioRequestRef.current <= requestId + 1 && audioData) {
-                playAudio(audioData);
-            }
-        });
+        
+        speakText(randomCompliment, language);
+
     } else {
         const penalty = getPenalty(robuxScore);
         setRobuxScore(score => Math.max(0, score - penalty));
@@ -622,7 +490,7 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
         setTypedAnswer('');
         generateQuestion();
     }, 1250);
-  }, [isAnswered, typedAnswer, currentQuestion, setRobuxScore, generateQuestion, robuxScore]);
+  }, [isAnswered, typedAnswer, currentQuestion, setRobuxScore, generateQuestion, robuxScore, language]);
 
 
   if (showIntroMessage) {
