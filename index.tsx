@@ -3,6 +3,23 @@ import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Modality } from "@google/genai";
 
 // ============================================================================
+// ENVIRONMENT POLYFILL (Fixes ReferenceError in Browser)
+// ============================================================================
+// This ensures process.env.API_KEY exists even in static browser environments.
+if (typeof window !== 'undefined' && typeof process === 'undefined') {
+    const storedKey = localStorage.getItem('GEMINI_API_KEY') || '';
+    (window as any).process = { 
+        env: { 
+            API_KEY: storedKey 
+        } 
+    };
+    
+    if (!storedKey) {
+        console.log("%c To enable speech on GitHub/Browser: Open Console -> Run: localStorage.setItem('GEMINI_API_KEY', 'your_key_here') -> Reload", "background: #222; color: #bada55; padding: 4px; border-radius: 4px;");
+    }
+}
+
+// ============================================================================
 // TYPES
 // ============================================================================
 type GameState = 'selecting_difficulty' | 'playing' | 'won';
@@ -121,14 +138,16 @@ const playAudio = async (audioData: string | null) => {
 // SERVICES
 // ============================================================================
 async function generateSpeech(text: string): Promise<string | null> {
-    try {
-        // Safety check: prevent crash if process or API_KEY is missing (e.g. GitHub Pages)
-        if (typeof process === 'undefined' || !process.env || !process.env.API_KEY) {
-          console.warn("API Key is missing. Speech generation skipped.");
-          return null;
-        }
+    // Access is safe due to polyfill above
+    const apiKey = process.env.API_KEY;
 
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    if (!apiKey) {
+        // Fail silently if no key is present (avoids spamming console on GitHub demo)
+        return null;
+    }
+
+    try {
+        const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
             contents: [{ parts: [{ text }] }],

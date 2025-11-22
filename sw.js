@@ -1,4 +1,4 @@
-const CACHE_NAME = 'robux-multiplication-cache-v4';
+const CACHE_NAME = 'robux-multiplication-cache-v5';
 const urlsToCache = [
   './',
   './index.html',
