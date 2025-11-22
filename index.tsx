@@ -28,42 +28,95 @@ interface Question {
 // ============================================================================
 // NATIVE BROWSER AUDIO SYSTEM (Web Speech API)
 // ============================================================================
-// No API Key required. Uses the browser's built-in TTS engine.
 
-const speakText = (text: string, language: Language) => {
+// Helper to load voices asynchronously (Chrome sometimes returns empty array initially)
+const getVoices = (): Promise<SpeechSynthesisVoice[]> => {
+  return new Promise((resolve) => {
+    let voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      resolve(voices);
+      return;
+    }
+    
+    window.speechSynthesis.onvoiceschanged = () => {
+      voices = window.speechSynthesis.getVoices();
+      resolve(voices);
+    };
+  });
+};
+
+const speakText = async (text: string, language: Language) => {
   if (!('speechSynthesis' in window)) {
-    console.warn('Web Speech API not supported in this browser.');
+    console.warn('Web Speech API not supported.');
     return;
   }
 
-  // Stop any currently speaking text to prevent overlap
+  // Cancel any ongoing speech
   window.speechSynthesis.cancel();
 
+  const voices = await getVoices();
   const utterance = new SpeechSynthesisUtterance(text);
-  
-  // Map internal Language enum to BCP 47 language tags
+
+  // Default settings
+  let selectedVoice: SpeechSynthesisVoice | undefined;
+  let pitch = 1.0;
+  let rate = 1.0;
+
   switch (language) {
     case Language.Hebrew:
       utterance.lang = 'he-IL';
+      
+      const heVoices = voices.filter(v => v.lang === 'he-IL' || v.lang === 'he');
+
+      // 1. Try to find high quality female voices (Google, Microsoft Hoda, Apple)
+      // These voices are usually natural and don't need tuning.
+      const preferredHeNames = ["Google", "Hoda", "Carmit", "Sivan"];
+      selectedVoice = heVoices.find(v => preferredHeNames.some(name => v.name.includes(name)));
+
+      // 2. Fallback logic
+      if (!selectedVoice && heVoices.length > 0) {
+         selectedVoice = heVoices[0];
+         
+         // If we are likely on a robotic male system voice (e.g. Microsoft David), 
+         // tune it to be "rounder" and "softer".
+         pitch = 0.9; // Slightly deeper/rounder
+         rate = 0.85; // Slower/Softer to reduce robotic clipping
+      }
+      
+      utterance.voice = selectedVoice || null;
       break;
+
     case Language.Russian:
       utterance.lang = 'ru-RU';
+      const ruVoices = voices.filter(v => v.lang === 'ru-RU' || v.lang === 'ru');
+      selectedVoice = ruVoices.find(v => v.name.includes("Google")) || ruVoices[0];
+      utterance.voice = selectedVoice || null;
       break;
+
     case Language.English:
     default:
       utterance.lang = 'en-US';
+      const enVoices = voices.filter(v => v.lang.startsWith('en'));
+      
+      // Priority: Google Female -> OS Female -> First available
+      const preferredEnNames = ["Google US English", "Samantha", "Zira", "Eva"];
+      selectedVoice = enVoices.find(v => preferredEnNames.some(name => v.name.includes(name)));
+      
+      if (!selectedVoice && enVoices.length > 0) {
+          selectedVoice = enVoices[0];
+          // If we are stuck with a generic voice (often robotic male "David" on Windows), tune it
+          if (selectedVoice.name.toLowerCase().includes("david") || selectedVoice.name.toLowerCase().includes("desktop")) {
+               pitch = 0.9; // Rounder
+               rate = 0.9;  // Softer
+          }
+      }
+      
+      utterance.voice = selectedVoice || null;
       break;
   }
 
-  utterance.rate = 1.0; // Normal speed
-  utterance.pitch = 1.0; // Normal pitch
-
-  // Ensure voices are loaded (Chrome quirk)
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length > 0) {
-      // Optional: Select a specific preferred voice if needed, 
-      // but allowing the browser default for the requested lang is usually safest.
-  }
+  utterance.pitch = pitch;
+  utterance.rate = rate;
 
   window.speechSynthesis.speak(utterance);
 };
@@ -282,16 +335,6 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
   const [typedAnswer, setTypedAnswer] = useState('');
   const [lastQuestion, setLastQuestion] = useState<{ num1: number, num2: number } | null>(null);
   
-  const isInitialLoad = useRef(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowIntroMessage(false);
-    }, 4000); // Show for 4 seconds
-    return () => clearTimeout(timer);
-  }, []);
-
-
   useEffect(() => {
     if(robuxScore >= 1000) {
       setGameState('won');
@@ -376,6 +419,13 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
               num2 = Math.floor(Math.random() * 9) + 2;
           }
       }
+
+      // NEW RULE: No multiplication by 1 if score >= 100
+      if (robuxScore >= 100) {
+        if (num1 === 1) num1 = Math.floor(Math.random() * 3) + 2; // Replace with 2, 3, or 4
+        if (num2 === 1) num2 = Math.floor(Math.random() * 3) + 2; // Replace with 2, 3, or 4
+      }
+
       isRepeated = lastQuestion && ((num1 === lastQuestion.num1 && num2 === lastQuestion.num2) || (num1 === lastQuestion.num2 && num2 === lastQuestion.num1));
     } while (isRepeated);
     
@@ -419,12 +469,11 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
 
   }, [difficulty, language, correctAnswersCount, correctStreak, robuxScore, difficultyLevel, lastQuestion]);
   
-  useEffect(() => {
-    if (!showIntroMessage && isInitialLoad.current) {
-        isInitialLoad.current = false;
-        generateQuestion();
-    }
-  }, [showIntroMessage, generateQuestion]);
+  // This function is triggered by the user clicking "START"
+  const handleStartGame = () => {
+      setShowIntroMessage(false);
+      generateQuestion();
+  };
 
   const handleAnswer = useCallback((selectedOption: number) => {
     if (isAnswered) return;
@@ -443,7 +492,9 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
       const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
       const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
       
-      speakText(randomCompliment, language);
+      // ALWAYS use English voice for compliments to ensure high-quality female voice
+      // even if the game is in Hebrew mode.
+      speakText(randomCompliment, Language.English);
 
     } else {
       const penalty = getPenalty(robuxScore);
@@ -476,7 +527,8 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
         const complimentArray = robuxScore >= 950 ? HIGH_SCORE_COMPLIMENTS : COMPLIMENTS;
         const randomCompliment = complimentArray[Math.floor(Math.random() * complimentArray.length)];
         
-        speakText(randomCompliment, language);
+        // ALWAYS use English voice for compliments to ensure high-quality female voice
+        speakText(randomCompliment, Language.English);
 
     } else {
         const penalty = getPenalty(robuxScore);
@@ -542,16 +594,21 @@ const GameScreen: React.FC<GameScreenProps> = ({ difficulty, language, robuxScor
                 </div>
 
                 {/* Message Box */}
-                <div className="bg-gradient-to-r from-slate-800 to-slate-900 border-4 border-yellow-500 p-8 rounded-3xl shadow-2xl text-center transform scale-100">
+                <div className="bg-gradient-to-r from-slate-800 to-slate-900 border-4 border-yellow-500 p-8 rounded-3xl shadow-2xl text-center transform scale-100 flex flex-col items-center">
                     <h2 className="text-3xl md:text-5xl text-white font-bold leading-tight mb-4" style={{ textShadow: '2px 2px 0 #000' }}>
                         Win <span className="text-yellow-400">1000 Robux</span>!
                     </h2>
-                    <p className="text-xl md:text-2xl text-gray-300 font-bold">
+                    <p className="text-xl md:text-2xl text-gray-300 font-bold mb-6">
                         Answer correctly to collect them all.
                     </p>
-                    <div className="mt-6 text-2xl md:text-4xl font-black text-green-400 animate-pulse">
-                        GOOD LUCK!
-                    </div>
+                    
+                    <button 
+                        onClick={handleStartGame}
+                        className="bg-green-500 hover:bg-green-600 text-white text-2xl md:text-3xl font-black py-4 px-12 rounded-xl shadow-lg animate-pulse transform hover:scale-105 transition-all"
+                        style={{ border: '4px solid black', boxShadow: '0 8px 0 #004400' }}
+                    >
+                        START GAME
+                    </button>
                 </div>
             </div>
         </div>
@@ -658,6 +715,11 @@ const App: React.FC = () => {
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.Easy);
   const [robuxScore, setRobuxScore] = useState<number>(0);
   const [language, setLanguage] = useState<Language>(Language.English);
+  
+  // Preload voices on app mount to ensure they are ready when the game starts
+  useEffect(() => {
+      getVoices();
+  }, []);
 
   const handleSelectDifficulty = (selectedDifficulty: Difficulty) => {
     setDifficulty(selectedDifficulty);
